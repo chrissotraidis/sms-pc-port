@@ -75,8 +75,12 @@ set_target_properties(sms_gx PROPERTIES POSITION_INDEPENDENT_CODE ON)
 # library still builds where only a host-supplied context is used.
 # On macOS x86_64, prefer a universal SDL2.framework — Homebrew's bottle is
 # often arm64-only and will not link into an x86_64 binary.
+# An app that owns its view (Apple mobile) hands over a CAMetalLayer and its
+# own Vulkan (MoltenVK linked into the app), and has the input and the sound:
+# no SDL then, even when a macOS SDL2.framework is at hand.
+option(SMS_GX_EMBEDDED "Draw into an app's CAMetalLayer instead of an SDL window" OFF)
 set(SMS_SDL2_FRAMEWORK "" CACHE PATH "Path to SDL2.framework (universal)")
-if(APPLE)
+if(APPLE AND NOT SMS_GX_EMBEDDED)
   set(_sms_sdl2_fw "")
   foreach(_cand
       "${SMS_SDL2_FRAMEWORK}"
@@ -100,7 +104,7 @@ if(APPLE)
     set(SMS_SDL2_FRAMEWORK_DIR "${_sms_sdl2_fw_dir}" PARENT_SCOPE)
   endif()
 endif()
-if(NOT TARGET SDL2::SDL2)
+if(NOT TARGET SDL2::SDL2 AND NOT SMS_GX_EMBEDDED)
   find_package(SDL2 CONFIG QUIET)
 endif()
 find_library(SMS_GX_EGL_LIB EGL)
@@ -114,9 +118,6 @@ if(TARGET SDL2::SDL2)
 else()
     message(STATUS "sms_gx: SDL2 not found - no window support")
 endif()
-# An app that owns its view (Apple mobile): it hands over a CAMetalLayer and its
-# own Vulkan (MoltenVK linked into the app), and has the input and the sound.
-option(SMS_GX_EMBEDDED "Draw into an app's CAMetalLayer instead of an SDL window" OFF)
 if(TARGET SDL2::SDL2 OR SMS_GX_EMBEDDED)
     # The save state messages, auto save's indicator, co-op's card and extensions' text on the picture.
     target_compile_definitions(sms_gx PRIVATE SMS_GX_HAVE_OVERLAYS=1)

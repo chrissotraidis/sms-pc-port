@@ -28,6 +28,9 @@ std::atomic<bool> s_started{false};
 std::string s_disc;
 std::mutex s_padLock;
 SmsEmbedPad s_pads[4];
+// SMS_AUTOPRESS (scripted input for repeatable test routes, platform/pad):
+// the port's own input path plays it, in place of the app's controllers.
+bool s_scripted = false;
 
 // The game keeps pointers to its locals in u32 slots: its thread runs on a
 // stack below the game's 2 GiB (port_low_alloc), as src/port_main.cpp does.
@@ -43,8 +46,10 @@ void* runGame(void*) {
 
 }  // namespace
 
-// platform/pad: the app's controllers in place of SDL's.
+// platform/pad: the app's controllers in place of SDL's (0: the port reads its
+// own input, which plays SMS_AUTOPRESS).
 extern "C" int port_host_pad_read(PADStatus* status) {
+    if (s_scripted) return 0;
     std::lock_guard<std::mutex> lock(s_padLock);
     for (int i = 0; i < 4; i++) {
         const SmsEmbedPad& pad = s_pads[i];
@@ -73,6 +78,8 @@ int sms_embed_start(const SmsEmbedConfig* config) {
     if (!config || config->version != SMS_EMBED_VERSION || !config->discImage) return -1;
     if (s_started.exchange(true)) return -1;
     s_disc = config->discImage;
+    const char* script = getenv("SMS_AUTOPRESS");
+    s_scripted = script && *script;
     setenv("SMS_AUDIO_OUT", "host", 1);
     setenv("SMS_GX_BACKEND", "vulkan", 1);
     GXPC_SetEmbeddedSurface(config->metalLayer, config->getInstanceProcAddr, config->width, config->height);
