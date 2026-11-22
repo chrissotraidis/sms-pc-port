@@ -152,6 +152,18 @@ endif()
 # instead (PORT_GAME_LO/HI): tools/gameptr's pass plugin rebases every integer
 # the code turns into a pointer (docs/MACOS-ARM64.md).
 set(SMS_MAC_ARM64 OFF)
+# Where game addresses from 0x80000000 live on native arm64 Apple systems
+# (PORT_GAME_HI): 1 TiB on macOS. An iPhone, iPad or Apple TV gives an app less
+# address space, so device builds for them use 0x7000000000 (448 GiB); the
+# Simulators run in the Mac's address space and keep the macOS base.
+set(SMS_GAME_HI "" CACHE STRING "PORT_GAME_HI on native arm64 Apple systems (empty: the platform's own)")
+if(NOT SMS_GAME_HI AND CMAKE_SYSTEM_NAME MATCHES "^(iOS|tvOS)$" AND NOT CMAKE_OSX_SYSROOT MATCHES "[Ss]imulator")
+  set(SMS_GAME_HI 0x7000000000)
+endif()
+if(SMS_GAME_HI)
+  add_compile_definitions(PORT_GAME_HI_VALUE=${SMS_GAME_HI}ull)
+  message(STATUS "SMS port: game addresses from 0x80000000 at ${SMS_GAME_HI} + x")
+endif()
 if(APPLE)
   if(CMAKE_OSX_ARCHITECTURES STREQUAL "arm64")
     set(SMS_MAC_ARM64 ON)
@@ -180,8 +192,12 @@ if(SMS_MAC_ARM64)
   set(SMS_GAMEPTR_SRC ${CMAKE_CURRENT_SOURCE_DIR}/tools/gameptr/GamePtrPass.cpp)
   set(SMS_GAMEPTR_PLUGIN ${CMAKE_BINARY_DIR}/gameptr/libSmsGamePtr.dylib)
   file(MAKE_DIRECTORY ${CMAKE_BINARY_DIR}/gameptr)
+  set(_gameptr_defs)
+  if(SMS_GAME_HI)
+    set(_gameptr_defs -DSMS_GAMEPTR_HI=${SMS_GAME_HI}ull)
+  endif()
   execute_process(
-    COMMAND ${CMAKE_CXX_COMPILER} -shared -fPIC -O2 ${_llvm_cxxflags} -undefined dynamic_lookup
+    COMMAND ${CMAKE_CXX_COMPILER} -shared -fPIC -O2 ${_llvm_cxxflags} ${_gameptr_defs} -undefined dynamic_lookup
             -o ${SMS_GAMEPTR_PLUGIN} ${SMS_GAMEPTR_SRC}
     RESULT_VARIABLE _gameptr_rc)
   if(NOT _gameptr_rc EQUAL 0)
@@ -191,6 +207,7 @@ if(SMS_MAC_ARM64)
   # The plugin's hash in every compile's arguments: a compiler cache keys
   # objects by them, and must not reuse one built with another plugin.
   file(SHA256 ${SMS_GAMEPTR_SRC} _gameptr_hash)
+  string(SHA256 _gameptr_hash "${_gameptr_hash}${SMS_GAME_HI}")
   string(SUBSTRING "${_gameptr_hash}" 0 16 _gameptr_hash)
   set(SMS_GAMEPTR_FLAGS -fpass-plugin=${SMS_GAMEPTR_PLUGIN} -DPORT_GAMEPTR_PLUGIN=1 -DPORT_GAMEPTR_HASH=${_gameptr_hash})
   list(APPEND SMS_GAME_FLAGS ${SMS_GAMEPTR_FLAGS})

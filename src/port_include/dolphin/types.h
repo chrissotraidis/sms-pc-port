@@ -80,7 +80,11 @@ typedef int BOOL;
  * other host. */
 #if defined(__APPLE__) && defined(__aarch64__)
 #define PORT_GAME_LO 0x100000000ull
+#ifdef PORT_GAME_HI_VALUE /* CMake's SMS_GAME_HI: iPhone, iPad and Apple TV devices */
+#define PORT_GAME_HI PORT_GAME_HI_VALUE
+#else
 #define PORT_GAME_HI 0x10000000000ull
+#endif
 #else
 #define PORT_GAME_LO 0ull
 #define PORT_GAME_HI 0ull

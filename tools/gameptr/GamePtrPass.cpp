@@ -60,7 +60,11 @@ using namespace llvm;
 namespace {
 
 constexpr uint64_t kLo = 0x100000000ull;  // PORT_GAME_LO
+#ifdef SMS_GAMEPTR_HI
+constexpr uint64_t kHi = SMS_GAMEPTR_HI;  // PORT_GAME_HI (CMake's SMS_GAME_HI)
+#else
 constexpr uint64_t kHi = 0x10000000000ull;  // PORT_GAME_HI
+#endif
 
 constexpr uint64_t kMin = 0x10000;  // PORT_GAME_MIN
 
