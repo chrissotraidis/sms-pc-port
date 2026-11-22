@@ -63,6 +63,8 @@ const char* GXPC_WindowTitle(void);
 void GXPC_SetEmbeddedSurface(void* metalLayer, void* getInstanceProcAddr, int width, int height);
 void GXPC_SetEmbeddedSize(int width, int height);
 void GXPC_SetEmbeddedRumble(void (*rumble)(unsigned short strength));
+/* The internal resolution over the GameCube's (1 to 8), applied at the next frame. */
+void GXPC_SetEmbeddedScale(float scale);
 /* 1 holds the game's thread at its next frame, once the frames already sent have
  * finished on the GPU (an iOS app in the background may not use it); 0 resumes. */
 void GXPC_SetEmbeddedPaused(int paused);

@@ -19,6 +19,7 @@ extern "C" void GXPC_SetEmbeddedSurface(void* metalLayer, void* getInstanceProcA
 extern "C" void GXPC_SetEmbeddedSize(int width, int height);
 extern "C" void GXPC_SetEmbeddedRumble(void (*rumble)(unsigned short strength));
 extern "C" void GXPC_SetEmbeddedPaused(int paused);
+extern "C" void GXPC_SetEmbeddedScale(float scale);
 extern "C" uint32_t GXPC_FrameCount(void);
 extern "C" double GXPC_LastPresentSeconds(void);
 
@@ -112,6 +113,8 @@ void sms_embed_set_pad(int port, const SmsEmbedPad* pad) {
 }
 
 void sms_embed_resize(int width, int height) { GXPC_SetEmbeddedSize(width, height); }
+
+void sms_embed_set_scale(float scale) { GXPC_SetEmbeddedScale(scale); }
 
 void sms_embed_audio_pull(void* stream, int bytes) { port_audio_host_pull(stream, bytes); }
 

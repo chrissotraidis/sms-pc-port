@@ -53,6 +53,9 @@ int sms_embed_start(const SmsEmbedConfig* config);
 void sms_embed_set_pad(int port, const SmsEmbedPad* pad);
 /* The layer's new drawable size, in pixels. */
 void sms_embed_resize(int width, int height);
+/* The internal resolution over the GameCube's 640x528 (1 to 8), applied at the
+ * game's next frame. SMS_GX_SCALE sets the first one. */
+void sms_embed_set_scale(float scale);
 /* SMS_AUDIO_OUT=host (which sms_embed_start sets): bytes of 32 kHz
  * interleaved stereo 16-bit samples, for the app's audio unit. */
 void sms_embed_audio_pull(void* stream, int bytes);

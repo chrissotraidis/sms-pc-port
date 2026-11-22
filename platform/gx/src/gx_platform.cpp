@@ -24,6 +24,7 @@
 #include <time.h>
 #include <atomic>
 #include <chrono>
+#include <cmath>
 #include <condition_variable>
 #include <mutex>
 #include <string>
@@ -939,6 +940,9 @@ struct EmbeddedSurface {
     std::mutex pauseLock;
     std::condition_variable changed;
     bool paused = false, parked = false;
+    // GXPC_SetEmbeddedScale: an internal resolution the app chose, applied at the next frame on the
+    // game's thread (0: none waiting), where the port's settings menu applies its own.
+    std::atomic<float> scale{0.0f};
 };
 EmbeddedSurface s_embedded;
 
@@ -975,6 +979,11 @@ void presentEmbedded(const void* xfb) {
         }
     }
     const int w = s_embedded.width, h = s_embedded.height;
+    const float scale = s_embedded.scale.exchange(0.0f);
+    if (scale >= 1.0f)
+        glt::sync([scale] {
+            if (std::fabs(scale - efbScale()) >= 0.005f) rendererResize(scale, rendererMsaa());
+        });
     double t0 = 0, t1 = 0, tSwapped = 0;
     const double waited0 = glt::waitedSeconds();
     glt::sync([&] {
@@ -1952,6 +1961,8 @@ void GXPC_SetEmbeddedSize(int width, int height) {
 }
 
 void GXPC_SetEmbeddedRumble(void (*rumble)(unsigned short strength)) { s_embedded.rumble = rumble; }
+
+void GXPC_SetEmbeddedScale(float scale) { s_embedded.scale = std::max(1.0f, std::min(8.0f, scale)); }
 
 void GXPC_SetEmbeddedPaused(int paused) {
     std::unique_lock<std::mutex> lock(s_embedded.pauseLock);
