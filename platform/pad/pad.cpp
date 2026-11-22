@@ -1164,6 +1164,8 @@ extern "C" void PADControlMotor(s32 chan, u32 command)
 extern "C" void PADControlAllMotors(const u32* commands) { PADControlMotor(0, commands[0]); }
 
 extern "C" __attribute__((weak)) int port_trace_pad_read(struct PADStatus* status);
+// An app that embeds the game (platform/embed) reads the controllers itself.
+extern "C" __attribute__((weak)) int port_host_pad_read(struct PADStatus* status);
 // Extensions (ext/, src/port_include/port_ext.h) may change what was read.
 extern "C" __attribute__((weak)) void port_ext_pad_read(void* status);
 
@@ -1813,6 +1815,8 @@ extern "C" u32 PADRead(PADStatus* status)
 		port_cstick_orbit        = 0;
 		return PAD_CHAN0_BIT;
 	}
+	if (port_host_pad_read && port_host_pad_read(status))
+		return PAD_CHAN0_BIT;
 	init();
 	port_fludd_aim_invert_y  = g_invertFluddY;
 	port_close_camera_cstick = g_closeCameraCStick;

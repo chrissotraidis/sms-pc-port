@@ -38,7 +38,6 @@
 #ifdef __APPLE__
 #include <sys/ucontext.h>
 #include <mach/mach.h>
-#include <mach/mach_vm.h>
 #endif
 #endif
 
@@ -551,17 +550,18 @@ static void* low_map(size_t size, int prot)
 #endif
 
 #if PORT_GAME_HI
-// What already holds [at, at + size) on macOS, for a report when MEM1 cannot
-// be mapped there.
+// What already holds [at, at + size) on Apple systems, for a report when MEM1
+// cannot be mapped there. vm_region_recurse_64 rather than mach_vm_*: iOS and
+// tvOS do not offer <mach/mach_vm.h>, and vm_address_t is 64 bits here.
 static void log_mapping_at(uintptr_t at, size_t size)
 {
-	mach_vm_address_t addr = at;
+	vm_address_t addr = at;
 	for (int n = 0; n < 8; n++) {
-		mach_vm_size_t len = 0;
+		vm_size_t len = 0;
 		natural_t depth = 0;
 		vm_region_submap_info_data_64_t info;
 		mach_msg_type_number_t count = VM_REGION_SUBMAP_INFO_COUNT_64;
-		if (mach_vm_region_recurse(mach_task_self(), &addr, &len, &depth, (vm_region_recurse_info_t)&info, &count) != KERN_SUCCESS
+		if (vm_region_recurse_64(mach_task_self(), &addr, &len, &depth, (vm_region_recurse_info_64_t)&info, &count) != KERN_SUCCESS
 			|| addr >= at + size)
 			break;
 		port_log("[port]   taken: 0x%llx-0x%llx prot %d/%d tag %u share %u%s\n", (unsigned long long)addr,

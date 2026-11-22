@@ -70,7 +70,8 @@ extern double g_presentSeconds, g_swapSeconds;
 using namespace gx;
 
 namespace {
-enum Mode { MODE_NONE, MODE_WINDOW, MODE_HEADLESS, MODE_EXTERNAL };
+// MODE_EMBEDDED: an app that owns its view draws the game in it (SMS_GX_EMBEDDED).
+enum Mode { MODE_NONE, MODE_WINDOW, MODE_HEADLESS, MODE_EXTERNAL, MODE_EMBEDDED };
 Mode s_mode = MODE_NONE;
 int s_forceHeadless = -1;  // -1: decide from the environment
 bool s_autoPresent = true;
@@ -923,6 +924,83 @@ bool openHeadlessVulkan(float scale) {
 }
 #endif
 
+#ifdef SMS_GX_EMBEDDED
+// An app that owns its view (SunPad on iOS and tvOS) hands over its CAMetalLayer and its
+// vkGetInstanceProcAddr (MoltenVK linked into the app), says how large the layer's drawable is
+// as that changes, and takes the controller's rumble. There is no SDL: the app has the window,
+// the input and the sound.
+struct EmbeddedSurface {
+    void* layer = nullptr;
+    void* getInstanceProcAddr = nullptr;
+    std::atomic<int> width{0}, height{0};
+    void (*rumble)(unsigned short strength) = nullptr;
+    // GXPC_SetEmbeddedPaused: the app goes to the background, where iOS lets no app use the GPU.
+    // The game's thread stops at its next frame once the GPU has finished (parked), and waits.
+    std::mutex pauseLock;
+    std::condition_variable changed;
+    bool paused = false, parked = false;
+};
+EmbeddedSurface s_embedded;
+
+bool openEmbedded(float scale) {
+    glvk::InitInfo vi;
+    vi.metalLayer = s_embedded.layer;
+    vi.getInstanceProcAddr = s_embedded.getInstanceProcAddr;
+    vi.width = s_embedded.width;
+    vi.height = s_embedded.height;
+    vi.vsync = s_vsync;
+    if (!glvk::init(vi)) return false;
+    s_vulkan = true;
+    if (!GXPC_Init(vkGetProc, scale)) {
+        glvk::shutdown();
+        s_vulkan = false;
+        return false;
+    }
+    if (glt::start([](void*) {}, nullptr)) glt::installProxies();
+    return true;
+}
+
+// GXPC_Present's window path without SDL: the frame and the port's overlays go to the app's layer.
+void presentEmbedded(const void* xfb) {
+    {
+        std::unique_lock<std::mutex> lock(s_embedded.pauseLock);
+        if (s_embedded.paused) {
+            lock.unlock();
+            glt::sync([] { glvk::suspend(); });
+            lock.lock();
+            s_embedded.parked = true;
+            s_embedded.changed.notify_all();
+            s_embedded.changed.wait(lock, [] { return !s_embedded.paused; });
+            s_embedded.parked = false;
+        }
+    }
+    const int w = s_embedded.width, h = s_embedded.height;
+    double t0 = 0, t1 = 0, tSwapped = 0;
+    const double waited0 = glt::waitedSeconds();
+    glt::sync([&] {
+        t0 = nowSeconds();
+        glvk::setDefaultFramebufferSize(w, h);
+        GXPC_PresentXFB(xfb, w, h);
+        GXPC_OverlayDraw(w, h);
+        savestateOverlayRender(w, h);
+        autosaveOverlayRender(w, h);
+        coopOverlayRender(w, h);
+        extOverlayRender(w, h);
+        t1 = nowSeconds();
+        glvk::present();
+        tSwapped = nowSeconds();
+    });
+    const double waited = glt::waitedSeconds() - waited0;
+    g_presentWaited += waited;
+    g_presentDrain += std::max(0.0, waited - (tSwapped - t0));
+    g_presentSeconds += t1 - t0;
+    g_swapSeconds += tSwapped - t1;
+    s_lastPresent = tSwapped - t0;
+    s_presentCost += (s_lastPresent - s_presentCost) * 0.1;
+    GXPC_EndPresent();
+}
+#endif
+
 void dumpFrame(const void* xfb) {
     static int every = -1;
     static const char* dir = nullptr;
@@ -1227,7 +1305,13 @@ int GXPC_MouseCaptured(void) {
     return 0;
 #endif
 }
-int GXPC_GameInputBlocked(void) { return menuVisible(); }
+int GXPC_GameInputBlocked(void) {
+#ifdef SMS_GX_HAVE_SDL2
+    return menuVisible();
+#else
+    return 0;  // the cheat and warp menus and the quit prompt need a window
+#endif
+}
 int GXPC_RequestQuit(void) {
 #ifdef SMS_GX_HAVE_SDL2
     if (s_mode != MODE_WINDOW || !s_window) return 0;
@@ -1268,6 +1352,17 @@ int GXPC_InitAuto(float efbScale) {
     // findDesktop for a session that lost DISPLAY / WAYLAND_DISPLAY).
     else headless = false;
     g_displayCopyHook = onDisplayCopy;
+#ifdef SMS_GX_EMBEDDED
+    if (s_embedded.layer) {
+        if (openEmbedded(efbScale)) {
+            s_mode = MODE_EMBEDDED;
+            logmsg("Vulkan on the app's view ready");
+            return 1;
+        }
+        logmsg("Vulkan could not start on the app's view; rendering is disabled");
+        return 0;
+    }
+#endif
 #ifdef SMS_GX_HAVE_SDL2
     if (!headless) {
         if (openWindowAnyBackend(efbScale)) {
@@ -1315,6 +1410,12 @@ int GXPC_InitAuto(float efbScale) {
 }
 
 void GXPC_Present(const void* xfb) {
+#ifdef SMS_GX_EMBEDDED
+    if (s_mode == MODE_EMBEDDED) {
+        presentEmbedded(xfb);
+        return;
+    }
+#endif
 #ifdef SMS_GX_HAVE_SDL2
     if (s_mode == MODE_WINDOW && s_window) {
         int w = 0, h = 0;
@@ -1742,6 +1843,10 @@ int sms_gx_rumble(unsigned short strength) {
     s_rumble.pad = s_rumblePad;
     s_rumble.called = true;
     return s_rumblePad >= 0;
+#elif defined(SMS_GX_EMBEDDED)
+    if (!s_embedded.rumble) return 0;
+    s_embedded.rumble(strength);
+    return 1;
 #else
     (void)strength;
     return 0;
@@ -1827,5 +1932,36 @@ void sms_gx_rumble_shutdown(void) {
     for (const Pad& p : s_pads) SDL_GameControllerRumble(p.c, 0, 0, 0);
 #endif
 }
+
+#ifndef SMS_GX_HAVE_SDL2
+// Without SDL the app reads its controllers itself.
+int GXPC_ControllerCount(void) { return 0; }
+int GXPC_ControllerType(int) { return -1; }
+#endif
+
+#ifdef SMS_GX_EMBEDDED
+void GXPC_SetEmbeddedSurface(void* metalLayer, void* getInstanceProcAddr, int width, int height) {
+    s_embedded.layer = metalLayer;
+    s_embedded.getInstanceProcAddr = getInstanceProcAddr;
+    GXPC_SetEmbeddedSize(width, height);
+}
+
+void GXPC_SetEmbeddedSize(int width, int height) {
+    s_embedded.width = std::max(1, width);
+    s_embedded.height = std::max(1, height);
+}
+
+void GXPC_SetEmbeddedRumble(void (*rumble)(unsigned short strength)) { s_embedded.rumble = rumble; }
+
+void GXPC_SetEmbeddedPaused(int paused) {
+    std::unique_lock<std::mutex> lock(s_embedded.pauseLock);
+    s_embedded.paused = paused != 0;
+    s_embedded.changed.notify_all();
+    // Pausing returns once the game's thread has parked with the GPU idle, or after two seconds
+    // (a game still loading presents no frame); iOS gives an app about five to go to the background.
+    if (s_embedded.paused && s_mode == MODE_EMBEDDED)
+        s_embedded.changed.wait_for(lock, std::chrono::seconds(2), [] { return s_embedded.parked; });
+}
+#endif
 
 }  // extern "C"

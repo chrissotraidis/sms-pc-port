@@ -109,12 +109,23 @@ if(TARGET SDL2::SDL2)
     target_compile_definitions(sms_gx PRIVATE SMS_GX_HAVE_SDL2=1)
     target_link_libraries(sms_gx PUBLIC SDL2::SDL2)
     message(STATUS "sms_gx: SDL2 window support")
-    # The cheat menu (F9), the warp menu (F8), the quit prompt (Escape), the save state messages, auto save's
-    # indicator, co-op's card and extensions' text in the window.
-    target_sources(sms_gx PRIVATE src/gx_cheat_menu.cpp src/gx_warp_menu.cpp src/gx_quit_prompt.cpp
-                   src/gx_savestate_overlay.cpp src/gx_autosave_overlay.cpp src/gx_coop_overlay.cpp src/gx_ext_overlay.cpp)
+    # The cheat menu (F9), the warp menu (F8) and the quit prompt (Escape), which the window's keys open.
+    target_sources(sms_gx PRIVATE src/gx_cheat_menu.cpp src/gx_warp_menu.cpp src/gx_quit_prompt.cpp)
 else()
     message(STATUS "sms_gx: SDL2 not found - no window support")
+endif()
+# An app that owns its view (Apple mobile): it hands over a CAMetalLayer and its
+# own Vulkan (MoltenVK linked into the app), and has the input and the sound.
+option(SMS_GX_EMBEDDED "Draw into an app's CAMetalLayer instead of an SDL window" OFF)
+if(TARGET SDL2::SDL2 OR SMS_GX_EMBEDDED)
+    # The save state messages, auto save's indicator, co-op's card and extensions' text on the picture.
+    target_compile_definitions(sms_gx PRIVATE SMS_GX_HAVE_OVERLAYS=1)
+    target_sources(sms_gx PRIVATE src/gx_savestate_overlay.cpp src/gx_autosave_overlay.cpp src/gx_coop_overlay.cpp
+                   src/gx_ext_overlay.cpp)
+endif()
+if(SMS_GX_EMBEDDED)
+    target_compile_definitions(sms_gx PRIVATE SMS_GX_EMBEDDED=1 VK_USE_PLATFORM_METAL_EXT=1)
+    message(STATUS "sms_gx: drawing into the embedding app's CAMetalLayer")
 endif()
 if(WIN32)
     # HDR output: a Direct3D 11 swap chain shares the frame with OpenGL (gx_hdr.cpp)

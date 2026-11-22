@@ -250,6 +250,13 @@ set_source_files_properties(${SMS_DECOMP_PCH_SOURCES} PROPERTIES
   COMPILE_OPTIONS "-include;${_sms_pch}")
 
 option(SMS_WITH_GX "Build and link platform/gx (the graphics layer)" ON)
+# An app that owns its window, input and sound loads the game as a library
+# (platform/embed/sms_embed.h): SunPad on iOS, iPadOS and tvOS.
+option(SMS_EMBED "Build libsms_embed.dylib for an embedding app instead of the sms program" OFF)
+if(SMS_EMBED)
+  set(SMS_GX_EMBEDDED ON CACHE BOOL "" FORCE)
+  set(SMS_GX_VULKAN ON CACHE BOOL "" FORCE)
+endif()
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND SMS_WITH_GX AND SMS_ARCH STREQUAL "32" AND DEFINED ENV{SMS_LINUX32_ROOT})
   set(_graphics "$ENV{SMS_LINUX32_ROOT}/graphics/usr")
   add_library(SDL2::SDL2 SHARED IMPORTED GLOBAL)
@@ -394,10 +401,20 @@ list(FILTER SMS_PLATFORM_SOURCES EXCLUDE REGEX "/platform/gx/")
 # platform/mods/eclipse is built by cmake/eclipse.cmake, and only with SMS_ECLIPSE.
 list(FILTER SMS_PLATFORM_SOURCES EXCLUDE REGEX "/platform/mods/eclipse/")
 list(FILTER SMS_PLATFORM_SOURCES EXCLUDE REGEX "/tests/")
+# platform/embed is the embedding app's side, built only with SMS_EMBED.
+list(FILTER SMS_PLATFORM_SOURCES EXCLUDE REGEX "/platform/embed/")
 if(WIN32 OR APPLE)
   list(FILTER SMS_PLATFORM_SOURCES EXCLUDE REGEX "/platform/trace/trace\\.cpp$")
 endif()
-add_executable(sms ${SMS_PORT_SRC}/port_main.cpp ${SMS_PLATFORM_SOURCES})
+if(SMS_EMBED)
+  # The target keeps the name sms, so everything below applies to it as to the program.
+  add_library(sms SHARED ${CMAKE_CURRENT_SOURCE_DIR}/platform/embed/embed.cpp ${SMS_PLATFORM_SOURCES})
+  set_target_properties(sms PROPERTIES OUTPUT_NAME sms_embed)
+  # The app sees sms_embed.h and nothing else of the game.
+  target_link_options(sms PRIVATE "LINKER:-exported_symbol,_sms_embed_*")
+else()
+  add_executable(sms ${SMS_PORT_SRC}/port_main.cpp ${SMS_PLATFORM_SOURCES})
+endif()
 # MSL's maths and the MTX/VEC library round every operation to single or
 # double as the Gekko does: SSE on x86 (never x87 extended precision) and no
 # contraction (their fused multiply-adds are explicit), on every host.
@@ -494,11 +511,15 @@ if(APPLE)
 else()
   sms_link_paths(sms "-Map=${CMAKE_BINARY_DIR}/sms.map")
 endif()
-add_custom_command(TARGET sms POST_BUILD
-  COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tools/savestate_ranges.py
-    --map ${CMAKE_BINARY_DIR}/sms.map --exe $<TARGET_FILE:sms>
-    --archive libsms_game.a --archive libsms_eclipse.a
-  COMMENT "Recording the game's data for save states" VERBATIM)
+# (Not for an embedding app's library: an app's code loads at a new address each
+# run, which save states cannot follow.)
+if(NOT SMS_EMBED)
+  add_custom_command(TARGET sms POST_BUILD
+    COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tools/savestate_ranges.py
+      --map ${CMAKE_BINARY_DIR}/sms.map --exe $<TARGET_FILE:sms>
+      --archive libsms_game.a --archive libsms_eclipse.a
+    COMMENT "Recording the game's data for save states" VERBATIM)
+endif()
 if(SMS_MAC_ARM64)
   # That rewrote the executable after the linker signed it, and arm64 macOS
   # kills a process whose signature does not match: sign it again (ad hoc).

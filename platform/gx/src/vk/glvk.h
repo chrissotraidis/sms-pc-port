@@ -17,6 +17,11 @@ namespace glvk {
 
 struct InitInfo {
     void* sdlWindow = nullptr;  // an SDL_Window made with SDL_WINDOW_VULKAN, or null for headless
+    // An app that owns its view (SMS_GX_EMBEDDED): its CAMetalLayer, that layer's drawable size in
+    // pixels, and the app's vkGetInstanceProcAddr (a MoltenVK linked into the app). Null without one.
+    void* metalLayer = nullptr;
+    int width = 0, height = 0;
+    void* getInstanceProcAddr = nullptr;
     int vsync = 0;              // as SDL_GL_SetSwapInterval: 0 off, 1 on, -1 adaptive
 };
 
@@ -40,6 +45,10 @@ void setSwapInterval(int vsync);
 // it was last saved (it is saved at shutdown too). Any thread: for moments
 // when a few milliseconds go unseen (a pause menu, a stage loading).
 void savePipelineCacheSoon();
+// Waits for the GPU to finish everything sent and saves new pipelines now:
+// before an embedding app goes to the background, where iOS lets no app use
+// the GPU. Drawing may go on afterwards.
+void suspend();
 
 // "NVIDIA GeForce GTX 1060 6GB" and similar, for logs.
 const char* deviceName();

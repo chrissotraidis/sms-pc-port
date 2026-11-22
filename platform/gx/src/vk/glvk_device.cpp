@@ -441,6 +441,12 @@ void recreateSwapchain() {
 void pipelineBuilt() { s_pipelinesBuilt++; }
 void savePipelineCacheSoon() { s_saveSoon = true; }
 
+void suspend() {
+    if (!s_active) return;
+    vkDeviceWaitIdle(D.dev);
+    savePipelineCache(false);
+}
+
 // ------------------------------------------------------------------ serials
 uint64_t pollCompleted() {
     uint64_t v = 0;
@@ -795,8 +801,15 @@ static void chooseDepthFormat() {
 bool init(const InitInfo& info) {
     if (s_active) return true;
     VkResult vr = VK_ERROR_INITIALIZATION_FAILED;
+    // A window to show frames in: SDL's, or an embedding app's layer
+    const bool presents = info.sdlWindow || info.metalLayer;
+    if (info.getInstanceProcAddr) {
+        volkInitializeCustom(reinterpret_cast<PFN_vkGetInstanceProcAddr>(info.getInstanceProcAddr));
+        vr = VK_SUCCESS;
+    }
 #ifndef _WIN32
-    if (const char* lib = libraryPath()) {
+    const char* lib = vr == VK_SUCCESS ? nullptr : libraryPath();
+    if (lib) {
         // a bundled library (MoltenVK): its entry points stand in for the loader's
         void* h = dlopen(lib, RTLD_NOW | RTLD_LOCAL);
         auto gipa = h ? reinterpret_cast<PFN_vkGetInstanceProcAddr>(dlsym(h, "vkGetInstanceProcAddr")) : nullptr;
@@ -835,6 +848,14 @@ bool init(const InitInfo& info) {
     }
 #else
     if (info.sdlWindow) return false;
+#endif
+#if defined(SMS_GX_EMBEDDED) && defined(VK_USE_PLATFORM_METAL_EXT)
+    if (info.metalLayer) {
+        exts.push_back(VK_KHR_SURFACE_EXTENSION_NAME);
+        exts.push_back(VK_EXT_METAL_SURFACE_EXTENSION_NAME);
+    }
+#else
+    if (info.metalLayer) return false;
 #endif
     uint32_t ien = 0;
     vkEnumerateInstanceExtensionProperties(nullptr, &ien, nullptr);
@@ -893,9 +914,21 @@ bool init(const InitInfo& info) {
         s_sc.window = info.sdlWindow;
     }
 #endif
-    if (!pickDevice(s_sc.surface, info.sdlWindow != nullptr)) {
+#if defined(SMS_GX_EMBEDDED) && defined(VK_USE_PLATFORM_METAL_EXT)
+    if (info.metalLayer) {
+        VkMetalSurfaceCreateInfoEXT surfaceInfo{VK_STRUCTURE_TYPE_METAL_SURFACE_CREATE_INFO_EXT};
+        surfaceInfo.pLayer = static_cast<const CAMetalLayer*>(info.metalLayer);
+        const VkResult sr = vkCreateMetalSurfaceEXT(D.instance, &surfaceInfo, nullptr, &s_sc.surface);
+        if (sr != VK_SUCCESS) {
+            logmsg("Vulkan: vkCreateMetalSurfaceEXT failed (%d)", int(sr));
+            shutdown();
+            return false;
+        }
+    }
+#endif
+    if (!pickDevice(s_sc.surface, presents)) {
         logmsg("Vulkan: no GPU with Vulkan 1.1, dynamic rendering, push descriptors and timeline semaphores%s",
-               info.sdlWindow ? " that can show this window" : "");
+               presents ? " that can show this window" : "");
         shutdown();
         return false;
     }
@@ -913,7 +946,7 @@ bool init(const InitInfo& info) {
         return true;
     };
     add(VK_KHR_PUSH_DESCRIPTOR_EXTENSION_NAME);
-    if (info.sdlWindow) add(VK_KHR_SWAPCHAIN_EXTENSION_NAME);
+    if (presents) add(VK_KHR_SWAPCHAIN_EXTENSION_NAME);
     const bool core12 = D.apiVersion >= VK_API_VERSION_1_2, core13 = D.apiVersion >= VK_API_VERSION_1_3;
     if (!core13) {
         add(VK_KHR_DYNAMIC_RENDERING_EXTENSION_NAME);
@@ -936,7 +969,7 @@ bool init(const InitInfo& info) {
     D.portability = add("VK_KHR_portability_subset");
     // Core Animation's drawables are given back only as the compositor shows
     // frames; presentFrame drops a frame rather than wait for one (vsync off)
-    if (D.portability && info.sdlWindow) D.displayTiming = add(VK_GOOGLE_DISPLAY_TIMING_EXTENSION_NAME);
+    if (D.portability && presents) D.displayTiming = add(VK_GOOGLE_DISPLAY_TIMING_EXTENSION_NAME);
 
     VkPhysicalDeviceFeatures2 f2{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2};
     VkPhysicalDeviceVulkan12Features f12{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES};
@@ -1187,6 +1220,10 @@ bool init(const InitInfo& info) {
         s_wantW = uint32_t(std::max(1, w));
         s_wantH = uint32_t(std::max(1, h));
 #endif
+        if (info.metalLayer) {
+            s_wantW = uint32_t(std::max(1, info.width));
+            s_wantH = uint32_t(std::max(1, info.height));
+        }
         if (!createSwapchain()) {
             logmsg("Vulkan: no swapchain for this window");
             shutdown();

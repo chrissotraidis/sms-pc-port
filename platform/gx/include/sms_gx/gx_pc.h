@@ -56,6 +56,16 @@ void GXPC_SetWindowIcon(const uint8_t* rgba, int w, int h);
  * the SDL window now, or when it opens, and shown in the debug overlay. */
 void GXPC_SetWindowTitle(const char* title);
 const char* GXPC_WindowTitle(void);
+/* An app that owns its view (SMS_GX_EMBEDDED, Apple mobile): before GXInit, its
+ * CAMetalLayer, its vkGetInstanceProcAddr and the layer's drawable size in
+ * pixels; later, each new size. The rumble handler takes the controller's motor
+ * strength (0 stops it, 65535 is full). */
+void GXPC_SetEmbeddedSurface(void* metalLayer, void* getInstanceProcAddr, int width, int height);
+void GXPC_SetEmbeddedSize(int width, int height);
+void GXPC_SetEmbeddedRumble(void (*rumble)(unsigned short strength));
+/* 1 holds the game's thread at its next frame, once the frames already sent have
+ * finished on the GPU (an iOS app in the background may not use it); 0 resumes. */
+void GXPC_SetEmbeddedPaused(int paused);
 /* 1 while the window holds the mouse for mouse look (SMS_MOUSE_CAMERA). */
 int GXPC_MouseCaptured(void);
 /* 1 while the cheat menu (F9) is open: the PAD layer reports an idle controller. */

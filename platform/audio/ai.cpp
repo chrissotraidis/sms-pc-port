@@ -514,6 +514,13 @@ void init_output()
 	}
 	e              = getenv("SMS_AUDIO_OUT");
 	bool headless  = getenv("SMS_HEADLESS") && strcmp(getenv("SMS_HEADLESS"), "0") != 0;
+	// SMS_AUDIO_OUT=host: an app that embeds the game pulls the output itself
+	// (port_audio_host_pull), as SDL's callback would.
+	if (g.output && e && strcmp(e, "host") == 0) {
+		g.sdl = true;
+		port_log("[audio] host output: the app pulls 32 kHz stereo\n");
+		return;
+	}
 	bool wantSdl   = e ? strcmp(e, "sdl") == 0 : !headless;
 	// SMS_VI_DETERMINISTIC: no device and no host clock; AI blocks are paced by
 	// VI retraces instead (port_audio_on_retrace), so runs stay repeatable.
@@ -648,6 +655,10 @@ extern "C" void AIInit(u8*)
 	port_irq_add_source(ai_poll);
 }
 extern "C" BOOL AICheckInit(void) { return g.inited; }
+
+// SMS_AUDIO_OUT=host: the embedding app's audio unit asks for `bytes` of 32 kHz
+// interleaved stereo 16-bit samples, from its own thread.
+extern "C" void port_audio_host_pull(void* stream, int bytes) { sdl_callback(NULL, (uint8_t*)stream, bytes); }
 extern "C" void AIReset(void) {}
 extern "C" AIDCallback AIRegisterDMACallback(AIDCallback cb)
 {

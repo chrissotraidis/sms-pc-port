@@ -12,7 +12,7 @@ namespace gx {
 // something else may have replaced since). Any thread.
 void extOverlayClearIf(int panel, const std::string& text);
 
-#ifdef SMS_GX_HAVE_SDL2
+#ifdef SMS_GX_HAVE_OVERLAYS
 // On the GL thread, between presenting the frame and the swap.
 void extOverlayRender(int winW, int winH);
 #else
