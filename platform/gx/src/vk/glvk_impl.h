@@ -70,6 +70,7 @@ struct Device {
     bool depthClipControl = false; // GL's [-1, 1] clip depth without a shader fix-up
     bool portability = false;      // MoltenVK (VK_KHR_portability_subset)
     bool noLodBias = false;        // samplers cannot bias the LOD (Metal): the shaders do (texture's bias argument)
+    bool noBaseVertex = false;     // no indexed draws with a base vertex (Metal on the iOS and tvOS Simulators)
     bool gpl = false;              // graphics pipeline libraries with fast linking: shaders built once per program
     bool displayTiming = false;    // VK_GOOGLE_display_timing: which presents the compositor has shown (MoltenVK)
     bool hostQueryReset = true;

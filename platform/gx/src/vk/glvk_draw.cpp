@@ -154,6 +154,7 @@ struct VertexLayout {
     uint32_t constMask = 0, constInteger = 0;
 };
 std::unordered_map<LayoutKey, VertexLayout*, LayoutKeyHash> s_layouts;
+const VertexLayout* s_boundLayout = nullptr;  // the last draw's, for rebaseVertices
 
 uint32_t typeBytes(GLenum t) {
     switch (t) {
@@ -716,6 +717,7 @@ void pushDescriptors(VkCommandBuffer cb, const DescSet& ds) {
 }
 
 bool bindVertexInput(VkCommandBuffer cb, const VertexLayout* vl) {
+    s_boundLayout = vl;
     for (uint32_t b = 0; b < vl->narray; b++) {
         Buffer* buf = g_buffers.get(vl->bufs[b]);
         if (!buf || !buf->buf) return false;
@@ -741,6 +743,21 @@ bool bindVertexInput(VkCommandBuffer cb, const VertexLayout* vl) {
         }
     }
     return true;
+}
+
+// Without base vertices (D.noBaseVertex), the vertex buffers are bound that many
+// vertices further on and the draw starts at vertex 0. Returns the draw's base.
+int32_t rebaseVertices(VkCommandBuffer cb, int32_t base) {
+    if (!D.noBaseVertex || !base || !s_boundLayout) return base;
+    const VertexLayout* vl = s_boundLayout;
+    for (uint32_t b = 0; b < vl->narray; b++) {
+        Buffer* buf = g_buffers.get(vl->bufs[b]);
+        const VkDeviceSize off = vl->offs[b] + VkDeviceSize(int64_t(base) * vl->binds[b].stride);
+        vkCmdBindVertexBuffers(cb, b, 1, &buf->buf, &off);
+        s_cc.vb[b] = buf->buf;
+        s_cc.vbOff[b] = off;
+    }
+    return 0;
 }
 
 // Everything a draw needs, up to the draw command. False: nothing to draw.
@@ -791,7 +808,8 @@ void drawElements(GLenum mode, GLsizei count, GLenum type, const void* indices, 
     VkCommandBuffer cb;
     if (!prepareDraw(mode, &cb) || !bindIndices(cb, type)) return;
     const uint32_t isz = type == GL_UNSIGNED_SHORT ? 2 : 4;
-    vkCmdDrawIndexed(cb, uint32_t(count), 1, uint32_t(reinterpret_cast<uintptr_t>(indices) / isz), base, 0);
+    vkCmdDrawIndexed(cb, uint32_t(count), 1, uint32_t(reinterpret_cast<uintptr_t>(indices) / isz),
+                     rebaseVertices(cb, base), 0);
     drawRecorded();
 }
 
@@ -1377,7 +1395,8 @@ GLAPI_FN(void, x_glMultiDrawElementsBaseVertex)(GLenum mode, const GLsizei* coun
     const uint32_t isz = type == GL_UNSIGNED_SHORT ? 2 : 4;
     for (GLsizei i = 0; i < drawcount; i++)
         if (count[i] > 0)
-            vkCmdDrawIndexed(cb, uint32_t(count[i]), 1, uint32_t(reinterpret_cast<uintptr_t>(indices[i]) / isz), base[i], 0);
+            vkCmdDrawIndexed(cb, uint32_t(count[i]), 1, uint32_t(reinterpret_cast<uintptr_t>(indices[i]) / isz),
+                             rebaseVertices(cb, base[i]), 0);
     drawRecorded();
 }
 

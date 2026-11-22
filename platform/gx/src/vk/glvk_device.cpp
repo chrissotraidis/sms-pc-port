@@ -933,6 +933,9 @@ bool init(const InitInfo& info) {
         return false;
     }
     D.apiVersion = std::min(D.props.apiVersion, app.apiVersion);
+    // MoltenVK on the iOS and tvOS Simulators' GPU cannot draw with a base vertex
+    // (VK_ERROR_FEATURE_NOT_PRESENT); every Apple device GPU can.
+    D.noBaseVertex = strstr(D.props.deviceName, "simulator") != nullptr;
 
     // device extensions and features
     uint32_t en = 0;
