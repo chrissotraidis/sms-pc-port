@@ -35,6 +35,7 @@
 #include "port_savestate.h"
 
 extern "C" void* port_low_alloc(unsigned long size);
+extern "C" int port_retail_ui; // SMS_RETAIL_UI (platform): no QUIT GAME
 extern "C" __attribute__((weak)) int GXPC_RequestQuit(void);
 extern "C" __attribute__((weak)) int GXPC_TexturePackHas(const void* data, unsigned fmt, unsigned w, unsigned h);
 extern "C" __attribute__((weak)) unsigned char* GXPC_TexturePackImage(const void* data, unsigned fmt, unsigned w,
@@ -593,6 +594,8 @@ bool packHasLetters()
 
 const ResTIMG* PauseQuitArt(int* layoutWidth)
 {
+	if (port_retail_ui)
+		return nullptr; // the pause menu as retail has it
 	// the pack's when it has the letters (and made from them), else the disc's
 	bool pack = packHasLetters();
 	for (int i = 0; i < 2; i++, pack = false) {

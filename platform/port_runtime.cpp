@@ -85,6 +85,12 @@ int port_pause_tracker = 1;
 // SMS_RADAR=1 shows the radar at the HUD's top right (src/radar.cpp); off by default.
 extern "C" int port_radar;
 int port_radar = 0;
+// SMS_RETAIL_UI=1 shows the game's menus and movies as retail does, for an app
+// with menus of its own (platform/embed): no save state or settings hints, no
+// settings menu on Y and no QUIT GAME in the pause menu, and no "(A) Skip" over
+// movies and logos (patch zzzzzzzzzzz-embed-01, src/pause_quit.cpp).
+extern "C" int port_retail_ui;
+int port_retail_ui = 0;
 // SMS_WIDESCREEN: the displayed width over the GameCube's 4:3 (1 when off);
 // the game camera (widescreen-01 patch) and sms_gx widen by it.
 extern "C" float port_widescreen;
@@ -1007,6 +1013,8 @@ extern "C" void port_init(int argc, char** argv)
 #endif
 	if (const char* r = getenv("SMS_RADAR"))
 		port_radar = *r && strcmp(r, "0") != 0 && strcmp(r, "off") != 0;
+	if (const char* u = getenv("SMS_RETAIL_UI"))
+		port_retail_ui = *u && strcmp(u, "0") != 0 && strcmp(u, "off") != 0;
 	port_widescreen = parse_widescreen(getenv("SMS_WIDESCREEN"));
 	if (GXPC_SetWidescreen)
 		GXPC_SetWidescreen(port_widescreen);

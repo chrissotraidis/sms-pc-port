@@ -1,0 +1,86 @@
+Reason: port: SMS_RETAIL_UI=1 (platform; an app with its own menus, platform/embed) shows the game as retail does: the pause menu without the save state and settings hints and with no settings menu on Y, and movies and logos without "(A) Skip" (retail's skip of a movie already seen stays); src/pause_quit.cpp leaves QUIT GAME out
+--- a/src/GC2D/PauseMenu2.cpp
++++ b/src/GC2D/PauseMenu2.cpp
+@@ -44,6 +44,10 @@
+ #include "port_savestate.h"
+ #include "port_savestate_menu.h"
+ #include "port_settings_menu.h"
++// SMS_RETAIL_UI (platform): the pause menu as retail has it, for an app with
++// its own menus (platform/embed): no save state or settings hints, and Y
++// opens nothing
++extern "C" int port_retail_ui;
+ #include <string.h>
+ 
+ // sms_gx widescreen: with the HUD at the screen edges (SMS_WIDESCREEN_HUD=edges)
+@@ -394,8 +398,10 @@
+ 		break;
+ 	}
+ #ifdef TARGET_PC
+-	PauseStateHintDraw(this, gfx);
+-	PauseSettingsHintDraw(this, gfx);
++	if (!port_retail_ui) {
++		PauseStateHintDraw(this, gfx);
++		PauseSettingsHintDraw(this, gfx);
++	}
+ 	// the Shine and blue coin tracker at the bottom left (src/pause_tracker.cpp),
+ 	// out of the way of the save dialog
+ 	if (port_pause_tracker && mState != MENU_SAVING && mState != MENU_CLOSED) {
+@@ -814,7 +820,7 @@
+ 		SettingsMenuMove(mGamePad);
+ 		return;
+ 	}
+-	if (mState == MENU_OPEN && mGamePad->testTrigger(JUTGamePad::Y)) {
++	if (mState == MENU_OPEN && !port_retail_ui && mGamePad->testTrigger(JUTGamePad::Y)) {
+ 		SettingsMenuOpen();
+ 		return;
+ 	}
+--- a/src/System/MovieDirector.cpp
++++ b/src/System/MovieDirector.cpp
+@@ -204,6 +204,9 @@
+ extern "C" float port_widescreen;
+ // SMS_SKIP_INTRO (platform): the opening movie ends as it starts (direct).
+ extern "C" int port_skip_intro;
++// SMS_RETAIL_UI (platform): movies as retail plays them, with no "(A) Skip"
++// (retail's own skip of a movie already seen stays)
++extern "C" int port_retail_ui;
+ 
+ // A movie of one frame stands in for one a mod took out: Super Mario Eclipse
+ // v1.1.0 keeps stolennozuru.thp (Shadow Mario taking FLUDD before a secret
+@@ -232,7 +235,7 @@
+ 
+ 	static bool shown(const TMovieDirector* director)
+ 	{
+-		return director->unk30.check(0x1) && !director->unk30.check(0x2)
++		return !port_retail_ui && director->unk30.check(0x1) && !director->unk30.check(0x2)
+ 		       && (director->unk1C == TMovieDirector::STATE_FADE_IN
+ 		           || director->unk1C == TMovieDirector::STATE_PLAYING);
+ 	}
+--- a/src/System/GCLogoDir.cpp
++++ b/src/System/GCLogoDir.cpp
+@@ -21,6 +21,8 @@
+ #ifdef TARGET_PC
+ // SMS_SKIP_INTRO (platform): no Nintendo and Dolby logos (direct).
+ extern "C" int port_skip_intro;
++// SMS_RETAIL_UI (platform): the logos as retail shows them, with no "(A) Skip"
++extern "C" int port_retail_ui;
+ // MovieDirector.cpp (zz-movie-skip-02): "(A) Skip" in the bottom-right corner.
+ void SMSDrawSkipPrompt(JDrama::TGraphics* graphics, int width, int height);
+ 
+@@ -39,7 +41,7 @@
+ 
+ 	virtual void perform(u32 cue, JDrama::TGraphics* graphics)
+ 	{
+-		if (cue & CUE_DRAW)
++		if ((cue & CUE_DRAW) && !port_retail_ui)
+ 			SMSDrawSkipPrompt(graphics, SMSGetGCLogoRenderWidth(),
+ 			                  SMSGetGCLogoRenderHeight());
+ 	}
+@@ -184,7 +186,7 @@
+ 	       | JUTGamePad::DPAD_RIGHT))
+ 		sGCLogoDPadPressed = true;
+ 	if (port_skip_intro
+-	    || (!sGCLogoDPadPressed && getGamePad()->checkFrameMeaning(0x20))) {
++	    || (!port_retail_ui && !sGCLogoDPadPressed && getGamePad()->checkFrameMeaning(0x20))) {
+ 		gpApplication.getFader()->setFadeStatus(
+ 		    TSMSFader::FADE_STATUS_FULLY_FADED_OUT);
+ 		mOverallState   = 2;
