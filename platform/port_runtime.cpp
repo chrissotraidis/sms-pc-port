@@ -38,6 +38,11 @@
 #ifdef __APPLE__
 #include <sys/ucontext.h>
 #include <mach/mach.h>
+#include <TargetConditionals.h>
+#endif
+// tvOS has no processes to start (fork, exec) and no alternate signal stacks.
+#if defined(__APPLE__) && TARGET_OS_TV
+#define PORT_NO_PROCESSES 1
 #endif
 #endif
 
@@ -206,6 +211,10 @@ static void crash_symbolise(void** bt, int n)
 	argv[argc] = nullptr;
 	if (argc == fixed)
 		return;
+#ifdef PORT_NO_PROCESSES
+	port_log("[port] backtrace in %s: frames left unsymbolised (no %s here)\n", exe, argv[0]);
+	return;
+#else
 	port_log("[port] backtrace in %s, symbolised by %s:\n", exe, argv[0]);
 	pid_t pid = fork();
 	if (pid == 0) {
@@ -218,6 +227,7 @@ static void crash_symbolise(void** bt, int n)
 	}
 	if (pid > 0)
 		waitpid(pid, nullptr, 0);
+#endif
 }
 
 // Every general register, and what the hardware said about the fault.
@@ -456,7 +466,7 @@ static void crash_handler(int sig, siginfo_t* si, void* uc)
 
 void port_crash_thread_init()
 {
-#ifndef _WIN32
+#if !defined(_WIN32) && !defined(PORT_NO_PROCESSES)
 	// A separate stack allows the first diagnostic to survive stack exhaustion.
 	alignas(16) static thread_local unsigned char crash_stack[64 * 1024];
 	stack_t stack = {};
