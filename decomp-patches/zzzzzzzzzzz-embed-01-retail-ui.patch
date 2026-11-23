@@ -1,4 +1,4 @@
-Reason: port: SMS_RETAIL_UI=1 (platform; an app with its own menus, platform/embed) shows the game as retail does: the pause menu without the save state and settings hints and with no settings menu on Y, and movies and logos without "(A) Skip" (retail's skip of a movie already seen stays); src/pause_quit.cpp leaves QUIT GAME out
+Reason: port: SMS_RETAIL_UI=1 (platform; an app with its own menus, platform/embed) shows the game as retail does: the pause menu without the save state and settings hints and with no settings menu on Y, and movies and logos without "(A) Skip" or A ending them (retail's skip of a movie already seen, SMS_SKIP_INTRO and placeholder movies stay); src/pause_quit.cpp leaves QUIT GAME out
 --- a/src/GC2D/PauseMenu2.cpp
 +++ b/src/GC2D/PauseMenu2.cpp
 @@ -44,6 +44,10 @@
@@ -41,20 +41,29 @@ Reason: port: SMS_RETAIL_UI=1 (platform; an app with its own menus, platform/emb
  // SMS_SKIP_INTRO (platform): the opening movie ends as it starts (direct).
  extern "C" int port_skip_intro;
 +// SMS_RETAIL_UI (platform): movies as retail plays them, with no "(A) Skip"
-+// (retail's own skip of a movie already seen stays)
++// and no A to end them (retail's own skip of a movie already seen stays)
 +extern "C" int port_retail_ui;
  
  // A movie of one frame stands in for one a mod took out: Super Mario Eclipse
  // v1.1.0 keeps stolennozuru.thp (Shadow Mario taking FLUDD before a secret
-@@ -232,7 +235,7 @@
+@@ -242,7 +245,7 @@
  
- 	static bool shown(const TMovieDirector* director)
- 	{
--		return director->unk30.check(0x1) && !director->unk30.check(0x2)
-+		return !port_retail_ui && director->unk30.check(0x1) && !director->unk30.check(0x2)
- 		       && (director->unk1C == TMovieDirector::STATE_FADE_IN
- 		           || director->unk1C == TMovieDirector::STATE_PLAYING);
- 	}
+ void TMovieSkipPrompt::perform(u32 cue, JDrama::TGraphics* graphics)
+ {
+-	if ((cue & CUE_DRAW) && shown(mDirector) && !placeholder_movie())
++	if ((cue & CUE_DRAW) && !port_retail_ui && shown(mDirector) && !placeholder_movie())
+ 		SMSDrawSkipPrompt(graphics, SMSGetGameRenderWidth(),
+ 		                  SMSGetGameRenderHeight());
+ }
+@@ -645,7 +648,7 @@
+ 	// way on its first frame, and so does a placeholder (placeholder_movie).
+ 	bool skipped = false;
+ 	if (TMovieSkipPrompt::shown(this)
+-	    && (getGamePad()->checkFrameMeaning(0x20)
++	    && ((!port_retail_ui && getGamePad()->checkFrameMeaning(0x20))
+ 	        || (port_skip_intro && gpApplication.getMovie() == 9)
+ 	        || placeholder_movie())) {
+ 		skipped = true;
 --- a/src/System/GCLogoDir.cpp
 +++ b/src/System/GCLogoDir.cpp
 @@ -21,6 +21,8 @@
