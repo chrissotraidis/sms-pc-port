@@ -8,6 +8,12 @@
 #include <string.h>
 #include <algorithm>
 #include <atomic>
+#include <condition_variable>
+#include <deque>
+#include <memory>
+#include <mutex>
+#include <thread>
+#include <unordered_set>
 
 namespace glvk {
 
@@ -356,15 +362,16 @@ PipeKey pipeKey(const VertexLayout* vl, VkPrimitiveTopology topo) {
     return k;
 }
 
-VkPipeline createPipeline(Program* p, const VertexLayout* vl, const PipeKey& k) {
+// The whole pipeline for a program's shaders, on any thread.
+VkResult buildPipeline(const VkShaderModule modules[3], const VertexLayout* vl, const PipeKey& k, VkPipeline* out) {
     VkPipelineShaderStageCreateInfo stages[3];
     uint32_t ns = 0;
     const VkShaderStageFlagBits kStage[3] = {VK_SHADER_STAGE_VERTEX_BIT, VK_SHADER_STAGE_GEOMETRY_BIT, VK_SHADER_STAGE_FRAGMENT_BIT};
     for (int s = 0; s < 3; s++) {
-        if (!p->modules[s]) continue;
+        if (!modules[s]) continue;
         stages[ns] = VkPipelineShaderStageCreateInfo{VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO};
         stages[ns].stage = kStage[s];
-        stages[ns].module = p->modules[s];
+        stages[ns].module = modules[s];
         stages[ns].pName = "main";
         ns++;
     }
@@ -430,10 +437,16 @@ VkPipeline createPipeline(Program* p, const VertexLayout* vl, const PipeKey& k) 
     ci.pColorBlendState = &cb;
     ci.pDynamicState = &dy;
     ci.layout = D.pipeLayout;
+    *out = VK_NULL_HANDLE;
+    const VkResult r = vkCreateGraphicsPipelines(D.dev, D.pipelineCache, 1, &ci, nullptr, out);
+    pipelineBuilt();
+    return r;
+}
+
+VkPipeline createPipeline(Program* p, const VertexLayout* vl, const PipeKey& k) {
     VkPipeline pipe = VK_NULL_HANDLE;
     const double t0 = now();
-    VkResult r = vkCreateGraphicsPipelines(D.dev, D.pipelineCache, 1, &ci, nullptr, &pipe);
-    pipelineBuilt();
+    const VkResult r = buildPipeline(p->modules, vl, k, &pipe);
     g_stats.pipelineSeconds += now() - t0;
     s_framePipelines++;
     s_framePipelineSeconds += now() - t0;
@@ -561,13 +574,144 @@ VkPipeline linkPipeline(Program* p, const VertexLayout* vl, const PipeKey& k) {
     return pipe;
 }
 
+// ------------------------------------------------------------------ background pipelines
+// SMS_VK_ASYNC_PIPELINES=1 (SunPad on iPhone, iPad and Apple TV). Without
+// pipeline libraries (MoltenVK) a pipeline is made whole at its first draw.
+// The first time on a device that is a Metal compile, 80 to 150 ms on an A15:
+// a new area stopped for seconds in its first moments. A pipeline this device
+// has made before is in the pipeline cache and takes under a millisecond, so
+// it is still made at its draw. A new one is made on a background thread, and
+// its draws are left out until it is ready, a few frames. The pipelines made
+// before are listed by hash in a file beside the pipeline cache, and forgotten
+// with it (a cache the driver rejects, or none).
+struct PipeJob {
+    Program* program;
+    VkShaderModule modules[3];
+    VertexLayout layout;
+    PipeKey key;
+    uint64_t slot, id;  // its key in program->pipelines, and its name across runs
+    bool started = false, done = false;  // under s_jobMu
+    VkPipeline pipe = VK_NULL_HANDLE;
+};
+std::mutex s_jobMu;
+std::condition_variable s_jobCv, s_jobDoneCv;
+std::deque<std::shared_ptr<PipeJob>> s_jobQueue;
+std::vector<std::thread> s_jobThreads;
+bool s_jobQuit = false;
+std::unordered_map<Program*, std::vector<std::shared_ptr<PipeJob>>> s_pendingPipes;  // GL thread
+std::mutex s_knownMu;
+std::unordered_set<uint64_t> s_knownPipes;
+std::string s_knownPath;
+size_t s_knownSaved = 0;
+
+bool asyncPipelines() {
+    static const bool on = [] {
+        const char* e = getenv("SMS_VK_ASYNC_PIPELINES");
+        return e && *e && strcmp(e, "0") != 0;
+    }();
+    return on && !D.gpl;
+}
+
+uint64_t pipelineId(Program* p, uint64_t slot) {
+    if (!p->spirvHash) {
+        uint64_t h = fnv(nullptr, 0);
+        for (const std::vector<uint32_t>& s : p->spirv) h = fnv(s.data(), s.size() * 4, h);
+        p->spirvHash = h | 1;
+    }
+    return fnv(&slot, sizeof slot, p->spirvHash);
+}
+
+bool knownPipeline(uint64_t id) {
+    std::lock_guard<std::mutex> lk(s_knownMu);
+    return s_knownPipes.count(id) != 0;
+}
+
+void rememberPipeline(uint64_t id) {
+    std::lock_guard<std::mutex> lk(s_knownMu);
+    s_knownPipes.insert(id);
+}
+
+void pipelineWorker() {
+    for (;;) {
+        std::shared_ptr<PipeJob> j;
+        {
+            std::unique_lock<std::mutex> lk(s_jobMu);
+            s_jobCv.wait(lk, [] { return s_jobQuit || !s_jobQueue.empty(); });
+            if (s_jobQuit) return;
+            j = s_jobQueue.front();
+            s_jobQueue.pop_front();
+            j->started = true;
+        }
+        VkPipeline pipe = VK_NULL_HANDLE;
+        if (buildPipeline(j->modules, &j->layout, j->key, &pipe) != VK_SUCCESS) pipe = VK_NULL_HANDLE;
+        {
+            std::lock_guard<std::mutex> lk(s_jobMu);
+            j->pipe = pipe;
+            j->done = true;
+        }
+        s_jobDoneCv.notify_all();
+    }
+}
+
+// A pipeline this device has not made before: made in the background. Null
+// until it is ready, and the draw is left out.
+VkPipeline backgroundPipeline(Program* p, const VertexLayout* vl, const PipeKey& k, uint64_t slot, uint64_t id) {
+    std::vector<std::shared_ptr<PipeJob>>& jobs = s_pendingPipes[p];
+    for (size_t i = 0; i < jobs.size(); i++) {
+        if (jobs[i]->slot != slot) continue;
+        VkPipeline pipe = VK_NULL_HANDLE;
+        {
+            std::lock_guard<std::mutex> lk(s_jobMu);
+            if (!jobs[i]->done) {
+                g_stats.skippedDraws++;
+                return VK_NULL_HANDLE;
+            }
+            pipe = jobs[i]->pipe;
+        }
+        p->pipelines[slot] = pipe;
+        if (pipe) {
+            rememberPipeline(id);
+            s_pipelineCreates++;
+            g_stats.pipelines++;
+            g_stats.backgroundPipelines++;
+        }
+        jobs.erase(jobs.begin() + long(i));
+        if (jobs.empty()) s_pendingPipes.erase(p);
+        return pipe;
+    }
+    auto j = std::make_shared<PipeJob>();
+    j->program = p;
+    for (int s = 0; s < 3; s++) j->modules[s] = p->modules[s];
+    j->layout = *vl;
+    j->key = k;
+    j->slot = slot;
+    j->id = id;
+    jobs.push_back(j);
+    {
+        std::lock_guard<std::mutex> lk(s_jobMu);
+        if (s_jobThreads.empty()) {
+            // the A15's six cores and the M2's eight: half for Metal's compiles, the game keeps the rest
+            const unsigned n = std::max(1u, std::min(3u, std::thread::hardware_concurrency() / 2));
+            for (unsigned t = 0; t < n; t++) s_jobThreads.emplace_back(pipelineWorker);
+        }
+        s_jobQueue.push_back(j);
+    }
+    s_jobCv.notify_one();
+    g_stats.skippedDraws++;
+    return VK_NULL_HANDLE;
+}
+
 VkPipeline pipelineFor(Program* p, const VertexLayout* vl, VkPrimitiveTopology topo) {
     const PipeKey k = pipeKey(vl, topo);
     const uint64_t h = fnv(&k, sizeof k);
     auto it = p->pipelines.find(h);
     if (it != p->pipelines.end()) return it->second;
+    const bool async = asyncPipelines();
+    const uint64_t id = async ? pipelineId(p, h) : 0;
+    if (async && !knownPipeline(id)) return backgroundPipeline(p, vl, k, h, id);
     VkPipeline pipe = D.gpl ? linkPipeline(p, vl, k) : createPipeline(p, vl, k);
     p->pipelines[h] = pipe;
+    if (async && pipe) rememberPipeline(id);
     return pipe;
 }
 
@@ -1037,7 +1181,70 @@ void beforeSubmit() {
     if (s_rendering) endRendering();
 }
 
+void loadKnownPipelines(const std::string& cachePath, bool cacheLoaded) {
+    std::lock_guard<std::mutex> lk(s_knownMu);
+    s_knownPipes.clear();
+    s_knownSaved = 0;
+    s_knownPath = cachePath.empty() ? std::string() : cachePath + ".known";
+    if (s_knownPath.empty()) return;
+    if (!cacheLoaded) {
+        remove(s_knownPath.c_str());  // the pipelines it named are not in the cache
+        return;
+    }
+    if (FILE* f = fopen(s_knownPath.c_str(), "rb")) {
+        uint64_t id;
+        while (fread(&id, sizeof id, 1, f) == 1) s_knownPipes.insert(id);
+        fclose(f);
+    }
+    s_knownSaved = s_knownPipes.size();
+    if (asyncPipelines())
+        logmsg("Vulkan: new pipelines made in the background; %zu made before on this device", s_knownPipes.size());
+}
+
+// With the pipeline cache, once it is saved (savePipelineCache).
+void saveKnownPipelines() {
+    std::lock_guard<std::mutex> lk(s_knownMu);
+    if (s_knownPath.empty() || s_knownPipes.size() == s_knownSaved) return;
+    const std::string tmp = s_knownPath + ".tmp";
+    FILE* f = fopen(tmp.c_str(), "wb");
+    if (!f) return;
+    bool ok = true;
+    for (uint64_t id : s_knownPipes) ok = ok && fwrite(&id, sizeof id, 1, f) == 1;
+    fclose(f);
+    if (ok && rename(tmp.c_str(), s_knownPath.c_str()) == 0) s_knownSaved = s_knownPipes.size();
+    else remove(tmp.c_str());
+}
+
+void forgetBackgroundPipelines(Program* p, std::vector<VkPipeline>& pipes) {
+    auto it = s_pendingPipes.find(p);
+    if (it == s_pendingPipes.end()) return;
+    std::unique_lock<std::mutex> lk(s_jobMu);
+    for (const std::shared_ptr<PipeJob>& j : it->second) {
+        if (!j->started) {
+            s_jobQueue.erase(std::remove(s_jobQueue.begin(), s_jobQueue.end(), j), s_jobQueue.end());
+            continue;
+        }
+        s_jobDoneCv.wait(lk, [&] { return j->done; });  // it is using the program's shader modules
+        pipes.push_back(j->pipe);
+    }
+    lk.unlock();
+    s_pendingPipes.erase(it);
+}
+
 void destroyDrawObjects() {
+    {
+        std::lock_guard<std::mutex> lk(s_jobMu);
+        s_jobQuit = true;
+        s_jobQueue.clear();
+    }
+    s_jobCv.notify_all();
+    for (std::thread& t : s_jobThreads) t.join();
+    s_jobThreads.clear();
+    s_jobQuit = false;
+    for (auto& kv : s_pendingPipes)
+        for (const std::shared_ptr<PipeJob>& j : kv.second)
+            if (j->pipe) vkDestroyPipeline(D.dev, j->pipe, nullptr);
+    s_pendingPipes.clear();
     for (auto* m : {&s_vertexLibs, &s_outputLibs}) {
         for (auto& kv : *m)
             if (kv.second) vkDestroyPipeline(D.dev, kv.second, nullptr);

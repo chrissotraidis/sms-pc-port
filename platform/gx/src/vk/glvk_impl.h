@@ -110,6 +110,14 @@ VmaAllocationCreateInfo hostBufferAllocInfo(bool readback);
 // After each vkCreateGraphicsPipelines (any thread): the pipeline cache is
 // saved only when something was built since it was last (savePipelineCache).
 void pipelineBuilt();
+// SMS_VK_ASYNC_PIPELINES (glvk_draw.cpp): the pipelines this device has made
+// before, listed beside the pipeline cache file and forgotten with it
+void loadKnownPipelines(const std::string& cachePath, bool cacheLoaded);
+void saveKnownPipelines();
+// A program going away: its pipelines still being made are waited for, and
+// added to pipes, to be destroyed with its others.
+struct Program;
+void forgetBackgroundPipelines(Program* p, std::vector<VkPipeline>& pipes);
 
 // The serial the commands being recorded now will signal.
 inline uint64_t currentSerial() { return D.submitted + 1; }
@@ -131,6 +139,7 @@ struct Stats {
     uint32_t dropped = 0;  // frames not presented: no drawable free without waiting (vsync off, MoltenVK)
     double waitSeconds = 0, submitSeconds = 0;
     double pipelineSeconds = 0;  // making pipelines
+    uint32_t backgroundPipelines = 0, skippedDraws = 0;  // SMS_VK_ASYNC_PIPELINES: made off the GL thread, draws left out meanwhile
 };
 extern Stats g_stats;
 double now();
@@ -322,6 +331,7 @@ struct Program {
     VkPipeline libPre[2] = {};   // pre-rasterisation shaders, without and with depth clamp
     VkPipeline libFrag[4] = {};  // fragment shader, by sample count (1, 2, 4, 8)
     uint32_t id = 0;
+    uint64_t spirvHash = 0;  // its SPIR-V's, naming its pipelines from run to run (background pipelines)
     std::shared_ptr<LinkJob> job;     // a link still compiling on a worker thread
     std::shared_ptr<LinkJob> libJob;  // a link whose pipeline library parts are still being made
 };

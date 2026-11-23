@@ -297,6 +297,8 @@ void destroyProgramObjects(Program* p) {
     std::vector<VkPipeline> pipes;
     for (auto& kv : p->pipelines) pipes.push_back(kv.second);
     p->pipelines.clear();
+    forgetBackgroundPipelines(p, pipes);
+    p->spirvHash = 0;
     for (VkPipeline& l : p->libPre) pipes.push_back(l), l = VK_NULL_HANDLE;
     for (VkPipeline& l : p->libFrag) pipes.push_back(l), l = VK_NULL_HANDLE;
     VkShaderModule mods[3] = {p->modules[0], p->modules[1], p->modules[2]};

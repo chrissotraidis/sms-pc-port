@@ -286,6 +286,7 @@ void loadPipelineCache() {
         data.clear();
     }
     D.pipelineCacheSavedSize = data.size();
+    loadKnownPipelines(D.pipelineCachePath, !data.empty());
     if (!D.pipelineCachePath.empty())
         logmsg("Vulkan pipeline cache: %s (%zu KiB)", D.pipelineCachePath.c_str(), data.size() / 1024);
 }
@@ -315,6 +316,7 @@ void savePipelineCache(bool force) {
         fclose(f);
         if (ok && rename(tmp.c_str(), D.pipelineCachePath.c_str()) == 0) {
             D.pipelineCacheSavedSize = size;
+            saveKnownPipelines();
             logmsg("Vulkan pipeline cache saved (%zu KiB)", size / 1024);
         } else remove(tmp.c_str());
     }
@@ -495,6 +497,9 @@ static void statsFrame() {
         const QueryUsage q = queryUsage();
         logmsg("Vulkan queries: %u held, %u retired, %u pools of 4096", q.held, q.retired, q.pools);
     }
+    if (g_stats.backgroundPipelines || g_stats.skippedDraws)
+        logmsg("Vulkan stats: %u pipelines made in the background, %u draws left out until they were",
+               g_stats.backgroundPipelines, g_stats.skippedDraws);
     if (g_stats.dropped) logmsg("Vulkan stats: %u of %u frames not presented (no drawable free)", g_stats.dropped, g_stats.frames);
     {
         VmaBudget budgets[VK_MAX_MEMORY_HEAPS];
